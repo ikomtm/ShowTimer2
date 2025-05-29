@@ -59,7 +59,7 @@ class MainWindow(QMainWindow):
 
         # Table setup
         self.Songs_table.setColumnCount(3)
-        self.Event_table.setColumnCount(2)
+        self.Event_table.setColumnCount(3)
         self.Songs_table.setSelectionBehavior(self.Songs_table.SelectionBehavior.SelectRows)
         self.Songs_table.setEditTriggers(self.Songs_table.EditTrigger.NoEditTriggers)
         self.Songs_table.cellDoubleClicked.connect(self.edit_song_cell)
@@ -154,7 +154,7 @@ class MainWindow(QMainWindow):
         current_time_str = self.song_elapsed.toString("mm:ss")
 
         # Событие: [название, время]
-        new_event = [f"Событие {event_index}", current_time_str]
+        new_event = [str(event_index), f"Событие {event_index}", current_time_str]
         events.append(new_event)
 
         self.Event_table.setRowCount(len(events))
@@ -195,7 +195,7 @@ class MainWindow(QMainWindow):
         """Редактировать ячейку таблицы событий."""
         item = self.Event_table.item(row, column)
         if item:
-            if column == 1:  # Валидация времени
+            if column == 2:  # Валидация времени
                 text = item.text()
                 if not re.match(r"^[0-5][0-9]:[0-5][0-9]$", text):
                     QMessageBox.warning(self, "Ошибка", "Формат времени: mm:ss (00:00-59:59)")
@@ -233,7 +233,7 @@ class MainWindow(QMainWindow):
             self.song_elapsed = QTime(0, 0, 0)
             self.song_qtimer.start(1000)
         else:
-            self.prepare_show_timer_to_event()
+            self.prepare_show_timer_to_event([2])
             self.show_qtimer.start(1000)
 
     def stop_timer(self):
@@ -242,9 +242,22 @@ class MainWindow(QMainWindow):
         self.show_qtimer.stop()
 
         row = self.Songs_table.currentRow()
-        if row >= 0:
+        if row < 0:
+            return
+
+        # Если работал секундомер — записываем длительность
+        if self.song_qtimer.isActive() or not self.show_event_list:
             duration_str = self.song_elapsed.toString("mm:ss")
             self.Songs_table.setItem(row, 2, QTableWidgetItem(duration_str))
+
+        # Сброс состояния
+        self.song_elapsed = QTime(0, 0, 0)
+        self.song_timer.setText("00:00")
+        self.show_timer.setText("00:00")
+        self.Show_Event.setText("Событие")
+        self.show_target_time = None
+        self.current_event_index = 0
+        self.show_event_list = []
 
     def reset_timer(self):
         """Сбросить таймер."""
@@ -260,20 +273,23 @@ class MainWindow(QMainWindow):
         self.song_timer.setText(self.song_elapsed.toString("mm:ss"))
 
     def update_show_timer(self):
-        """Обновить таймер обратного отсчёта."""
+        """Обновить таймер обратного отсчёта до следующего события."""
         self.song_elapsed = self.song_elapsed.addSecs(1)
 
         if not self.show_target_time:
             return
 
         remaining = self.song_elapsed.secsTo(self.show_target_time)
-        if remaining <= 0:
+
+        if remaining > 0:
+            # Обратный отсчёт до следующего события
+            mins, secs = divmod(remaining, 60)
+            self.show_timer.setText(f"{mins:02d}:{secs:02d}")
+            self.song_timer.setText(self.song_elapsed.toString("mm:ss"))
+        else:
+            # Событие наступило — обновляем и не делаем обратный отсчёт
             self.current_event_index += 1
             self.set_current_event_target()
-            return
-
-        mins, secs = divmod(remaining, 60)
-        self.song_timer.setText(f"{mins:02d}:{secs:02d}")
 
     def prepare_show_timer_to_event(self):
         """Подготовить таймер для событий."""
@@ -304,15 +320,21 @@ class MainWindow(QMainWindow):
 
     def set_current_event_target(self):
         """Установить следующее событие."""
-        if self.current_event_index >= len(self.show_event_list):
-            self.show_qtimer.stop()
-            self.song_timer.setText("00:00")
-            self.Show_Event.setText("🎵 Конец событий")
-            return
+        while self.current_event_index < len(self.show_event_list):
+            target_time, event_name, row_index = self.show_event_list[self.current_event_index]
+            if target_time > self.song_elapsed:
+                self.show_target_time = target_time
+                self.Show_Event.setText(f"⏰ {event_name}")
+                self.Event_table.selectRow(row_index)
+                return
+            else:
+                # если событие уже в прошлом — пропускаем
+                self.current_event_index += 1
 
-        self.show_target_time, event_name, row_index = self.show_event_list[self.current_event_index]
-        self.Show_Event.setText(f"⏰ {event_name}")
-        self.Event_table.selectRow(row_index)
+        # Все события пройдены
+        self.show_qtimer.stop()
+        self.show_timer.setText("00:00")
+        self.Show_Event.setText("🎵 Конец событий")
 
     def save_show(self):
         """Сохранить шоу в JSON."""
